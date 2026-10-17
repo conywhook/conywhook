@@ -9,7 +9,7 @@
   }
   const sb = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
 
-  const ROLE_NAMES = { owner: 'Владелец', admin: 'Администратор', coder: 'Кодер', user: 'Участник' };
+  const ROLE_NAMES = { owner: 'Владелец', admin: 'Администратор', helper: 'Помощник', user: 'Участник' };
   const USERNAME_RE = /^[A-Za-z0-9_]{3,20}$/;
   const state = { me: null, flashes: [] };
 
@@ -214,7 +214,9 @@
         <div class="muted">${esc(t.category_name)} · ${fmt(t.created_at)}</div></div></a>`).join('');
     const editForm = own ? `<h2>Редактировать профиль</h2>
       <form class="panel form" data-form="profile">
-        <label>Ссылка на аватар (https://…, поле пустое — аватар убрать)
+        <label>Загрузить картинку (до 2 МБ: PNG, JPG, GIF, WEBP)
+          <input type="file" name="avatarFile" accept="image/png,image/jpeg,image/gif,image/webp"></label>
+        <label>Или ссылка на аватар (https://…, поле пустое — аватар убрать)
           <input name="avatar" value="${esc(p.avatar_url || '')}" maxlength="500" placeholder="https://example.com/avatar.png"></label>
         <label>Описание (до 500 символов)
           <textarea name="bio" rows="4" maxlength="500">${esc(p.bio || '')}</textarea></label>
@@ -545,7 +547,19 @@
       }
 
       if (kind === 'profile') {
-        await rpc('update_profile', { p_avatar: v('avatar'), p_bio: f.elements.bio.value.trim() });
+        let avatar = v('avatar');
+        const file = f.elements.avatarFile?.files?.[0];
+        if (file) {
+          const types = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+          if (!types.includes(file.type)) throw new Error('Аватар: только PNG, JPG, GIF или WEBP.');
+          if (file.size > 2 * 1024 * 1024) throw new Error('Аватар: файл больше 2 МБ.');
+          const ext = file.type.split('/')[1].replace('jpeg', 'jpg');
+          const path = `${state.me.uid}/${Date.now()}.${ext}`;
+          const { error: upErr } = await sb.storage.from('avatars').upload(path, file, { contentType: file.type });
+          if (upErr) throw upErr;
+          avatar = sb.storage.from('avatars').getPublicUrl(path).data.publicUrl;
+        }
+        await rpc('update_profile', { p_avatar: avatar, p_bio: f.elements.bio.value.trim() });
         flash('Профиль сохранён.');
         return route();
       }
