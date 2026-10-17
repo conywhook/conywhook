@@ -9,6 +9,7 @@ create table if not exists public.profiles (
   id          uuid not null unique references auth.users(id) on delete cascade,
   username    text not null check (username ~ '^[A-Za-z0-9_]{3,20}$'),
   role        text not null default 'user' check (role in ('owner', 'admin', 'user')),
+  banned      boolean not null default false,
   invited_by  bigint references public.profiles(uid),
   created_at  timestamptz not null default now()
 );
@@ -26,7 +27,8 @@ create table if not exists public.categories (
   id          bigint generated always as identity primary key,
   name        text not null,
   description text not null default '',
-  position    int not null default 0
+  position    int not null default 0,
+  staff_only  boolean not null default false
 );
 
 create table if not exists public.threads (
@@ -68,12 +70,17 @@ $$;
 
 create or replace function public.is_staff() returns boolean
 language sql stable security definer set search_path = public as $$
-  select exists (select 1 from public.profiles where id = auth.uid() and role in ('owner', 'admin'))
+  select exists (select 1 from public.profiles where id = auth.uid() and role in ('owner', 'admin') and not banned)
 $$;
 
 create or replace function public.is_owner() returns boolean
 language sql stable security definer set search_path = public as $$
   select exists (select 1 from public.profiles where id = auth.uid() and role = 'owner')
+$$;
+
+create or replace function public.is_banned() returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (select 1 from public.profiles where id = auth.uid() and banned)
 $$;
 
 -- ---------- 3. Регистрация только по инвайту ----------
@@ -116,9 +123,9 @@ $$;
 
 -- ---------- 4. Профиль текущего пользователя ----------
 create or replace function public.my_profile()
-returns table (uid bigint, username text, role text)
+returns table (uid bigint, username text, role text, banned boolean)
 language sql stable security definer set search_path = public as $$
-  select p.uid, p.username, p.role from public.profiles p where p.id = auth.uid()
+  select p.uid, p.username, p.role, p.banned from public.profiles p where p.id = auth.uid()
 $$;
 
 -- ---------- 5. Форум: создание и ответы ----------
@@ -128,16 +135,20 @@ declare
   v_me  bigint := public.current_uid();
   v_tid bigint;
   v_ts  timestamptz := now();
+  v_staff_only boolean;
 begin
   if v_me is null then raise exception 'Сначала войдите в аккаунт.'; end if;
+  if public.is_banned() then raise exception 'Аккаунт заблокирован.'; end if;
+  select staff_only into v_staff_only from public.categories where id = p_category;
+  if not found then raise exception 'Раздел не найден.'; end if;
+  if v_staff_only and not public.is_staff() then
+    raise exception 'В этот раздел могут писать только администраторы.';
+  end if;
   if char_length(trim(p_title)) not between 3 and 120 then
     raise exception 'Заголовок: от 3 до 120 символов.';
   end if;
   if char_length(trim(p_body)) not between 1 and 20000 then
     raise exception 'Текст сообщения: от 1 до 20000 символов.';
-  end if;
-  if not exists (select 1 from public.categories where id = p_category) then
-    raise exception 'Раздел не найден.';
   end if;
   insert into public.threads (category_id, author_uid, title, created_at, last_post_at)
     values (p_category, v_me, trim(p_title), v_ts, v_ts)
@@ -152,11 +163,18 @@ returns bigint language plpgsql security definer set search_path = public as $$
 declare
   v_me     bigint := public.current_uid();
   v_locked boolean;
+  v_staff_only boolean;
   v_pid    bigint;
 begin
   if v_me is null then raise exception 'Сначала войдите в аккаунт.'; end if;
-  select is_locked into v_locked from public.threads where id = p_thread;
+  if public.is_banned() then raise exception 'Аккаунт заблокирован.'; end if;
+  select t.is_locked, c.staff_only into v_locked, v_staff_only
+    from public.threads t join public.categories c on c.id = t.category_id
+    where t.id = p_thread;
   if not found then raise exception 'Тред не найден.'; end if;
+  if v_staff_only and not public.is_staff() then
+    raise exception 'В этот раздел могут писать только администраторы.';
+  end if;
   if v_locked and not public.is_staff() then
     raise exception 'Тред закрыт для ответов.';
   end if;
@@ -248,6 +266,28 @@ begin
     values (trim(p_name), left(coalesce(p_description, ''), 200), coalesce(p_position, 0));
 end $$;
 
+create or replace function public.set_ban(p_uid bigint, p_banned boolean) returns void
+language plpgsql security definer set search_path = public as $$
+declare
+  v_my_role text;
+  v_target  public.profiles%rowtype;
+begin
+  if not public.is_staff() then raise exception 'Недостаточно прав.'; end if;
+  select role into v_my_role from public.profiles where id = auth.uid();
+  select * into v_target from public.profiles where uid = p_uid;
+  if not found then raise exception 'Пользователь не найден.'; end if;
+  if v_target.uid = public.current_uid() then raise exception 'Нельзя заблокировать себя.'; end if;
+  if v_target.role = 'owner' then raise exception 'Владельца нельзя заблокировать.'; end if;
+  if v_target.role = 'admin' and v_my_role <> 'owner' then
+    raise exception 'Только владелец может блокировать администраторов.';
+  end if;
+  update public.profiles set banned = p_banned where uid = p_uid;
+  -- Вход в Supabase Auth блокируется через banned_until (так же, как бан в панели Supabase)
+  update auth.users
+    set banned_until = case when p_banned then 'infinity'::timestamptz else null end
+    where id = v_target.id;
+end $$;
+
 -- ---------- 8. Безопасность: RLS и права ----------
 alter table public.profiles   enable row level security;
 alter table public.invites    enable row level security;
@@ -267,17 +307,116 @@ revoke all on all functions in schema public from public, anon, authenticated;
 
 grant select on public.categories, public.threads, public.posts to anon, authenticated;
 -- пароли и служебные поля (id = auth uuid) наружу не отдаём
-grant select (uid, username, role, invited_by, created_at) on public.profiles to anon, authenticated;
+grant select (uid, username, role, invited_by, created_at, banned) on public.profiles to anon, authenticated;
 grant select on public.invites to authenticated;
 grant select on public.thread_list to anon, authenticated;
 
 grant execute on function public.check_invite(text) to anon, authenticated;
-grant execute on function public.current_uid(), public.is_staff(), public.is_owner(),
+grant execute on function public.current_uid(), public.is_staff(), public.is_owner(), public.is_banned(), public.set_ban(bigint, boolean),
   public.my_profile(), public.create_thread(bigint, text, text),
   public.reply_to_thread(bigint, text), public.mod_thread(bigint, text),
   public.delete_thread(bigint), public.delete_post(bigint), public.create_invite(),
   public.set_role(bigint, text), public.create_category(text, text, int)
   to authenticated;
+
+-- ---------- Тикеты (баги и вопросы по сайту) ----------
+create table if not exists public.tickets (
+  id          bigint generated always as identity primary key,
+  author_uid  bigint not null references public.profiles(uid),
+  subject     text not null check (char_length(subject) between 3 and 120),
+  status      text not null default 'open' check (status in ('open', 'in_progress', 'closed')),
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+
+create table if not exists public.ticket_messages (
+  id          bigint generated always as identity primary key,
+  ticket_id   bigint not null references public.tickets(id) on delete cascade,
+  author_uid  bigint not null references public.profiles(uid),
+  body        text not null check (char_length(body) between 1 and 5000),
+  created_at  timestamptz not null default now()
+);
+create index if not exists idx_ticket_messages_ticket on public.ticket_messages(ticket_id);
+
+alter table public.tickets enable row level security;
+alter table public.ticket_messages enable row level security;
+
+drop policy if exists "tickets own or staff" on public.tickets;
+create policy "tickets own or staff" on public.tickets for select to authenticated
+  using (author_uid = public.current_uid() or public.is_staff());
+
+drop policy if exists "ticket messages own or staff" on public.ticket_messages;
+create policy "ticket messages own or staff" on public.ticket_messages for select to authenticated
+  using (exists (select 1 from public.tickets t
+                 where t.id = ticket_id and (t.author_uid = public.current_uid() or public.is_staff())));
+
+create or replace function public.create_ticket(p_subject text, p_body text)
+returns bigint language plpgsql security definer set search_path = public as $$
+declare
+  v_me  bigint := public.current_uid();
+  v_tid bigint;
+  v_ts  timestamptz := now();
+begin
+  if v_me is null then raise exception 'Сначала войдите в аккаунт.'; end if;
+  if public.is_banned() then raise exception 'Аккаунт заблокирован.'; end if;
+  if char_length(trim(p_subject)) not between 3 and 120 then
+    raise exception 'Тема: от 3 до 120 символов.';
+  end if;
+  if char_length(trim(p_body)) not between 1 and 5000 then
+    raise exception 'Описание: от 1 до 5000 символов.';
+  end if;
+  insert into public.tickets (author_uid, subject, created_at, updated_at)
+    values (v_me, trim(p_subject), v_ts, v_ts) returning id into v_tid;
+  insert into public.ticket_messages (ticket_id, author_uid, body, created_at)
+    values (v_tid, v_me, trim(p_body), v_ts);
+  return v_tid;
+end $$;
+
+create or replace function public.reply_ticket(p_ticket bigint, p_body text)
+returns bigint language plpgsql security definer set search_path = public as $$
+declare
+  v_me     bigint := public.current_uid();
+  v_author bigint;
+  v_status text;
+  v_mid    bigint;
+begin
+  if v_me is null then raise exception 'Сначала войдите в аккаунт.'; end if;
+  if public.is_banned() then raise exception 'Аккаунт заблокирован.'; end if;
+  select author_uid, status into v_author, v_status from public.tickets where id = p_ticket;
+  if not found then raise exception 'Тикет не найден.'; end if;
+  if v_author <> v_me and not public.is_staff() then
+    raise exception 'Недостаточно прав.';
+  end if;
+  if v_status = 'closed' and not public.is_staff() then
+    raise exception 'Тикет закрыт.';
+  end if;
+  if char_length(trim(p_body)) not between 1 and 5000 then
+    raise exception 'Сообщение: от 1 до 5000 символов.';
+  end if;
+  insert into public.ticket_messages (ticket_id, author_uid, body)
+    values (p_ticket, v_me, trim(p_body)) returning id into v_mid;
+  update public.tickets
+    set updated_at = now(),
+        status = case when public.is_staff() and status = 'open' then 'in_progress' else status end
+    where id = p_ticket;
+  return v_mid;
+end $$;
+
+create or replace function public.set_ticket_status(p_ticket bigint, p_status text) returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  if not public.is_staff() then raise exception 'Недостаточно прав.'; end if;
+  if p_status not in ('open', 'in_progress', 'closed') then raise exception 'Недопустимый статус.'; end if;
+  update public.tickets set status = p_status, updated_at = now() where id = p_ticket;
+  if not found then raise exception 'Тикет не найден.'; end if;
+end $$;
+
+revoke execute on function public.create_ticket(text, text) from public, anon;
+revoke execute on function public.reply_ticket(bigint, text) from public, anon;
+revoke execute on function public.set_ticket_status(bigint, text) from public, anon;
+grant execute on function public.create_ticket(text, text), public.reply_ticket(bigint, text),
+  public.set_ticket_status(bigint, text) to authenticated;
+grant select on public.tickets, public.ticket_messages to authenticated;
 
 -- ---------- 9. Стартовые данные (выполнить один раз) ----------
 insert into public.categories (name, description, position)
@@ -287,6 +426,9 @@ select * from (values
   ('Общее', 'Всё остальное', 3)
 ) as v(name, description, position)
 where not exists (select 1 from public.categories);
+
+-- Разделы 1 и 2 (Объявления, Читы) — только для администрации.
+update public.categories set staff_only = true where id in (1, 2);
 
 -- Стартовый инвайт для владельца. Замените код на свой (формат CW-XXXX-XXXX-XXXX)
 -- и используйте только один раз: после регистрации он сгорает.
