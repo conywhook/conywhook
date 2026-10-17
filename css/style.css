@@ -84,3 +84,5 @@ textarea { resize: vertical; min-height: 120px; }
   .stat { width: auto; }
   .row { flex-wrap: wrap; }
 }
+
+.stat.action { width: 260px; text-align: right; }
