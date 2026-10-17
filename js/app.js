@@ -18,7 +18,7 @@
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const fmt = (v) => (v ? new Date(v).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' }) : '—');
   const $app = () => document.getElementById('app');
-  const isStaff = () => !!state.me && (state.me.role === 'owner' || state.me.role === 'admin');
+  const isStaff = () => !!state.me && !state.me.banned && (state.me.role === 'owner' || state.me.role === 'admin');
   const isOwner = () => !!state.me && state.me.role === 'owner';
   const emailFor = (name) => `${name.toLowerCase()}@conywhook.local`;
   const roleTag = (r) => `<span class="role role-${esc(r)}">${esc(ROLE_NAMES[r] || r)}</span>`;
@@ -54,6 +54,7 @@
   function renderNav() {
     const links = ['<a href="#/">Форум</a>'];
     if (state.me) {
+      links.push('<a href="#/tickets">Тикеты</a>');
       if (isStaff()) links.push('<a href="#/admin">Администрация</a>');
       links.push(`<a href="#/u/${state.me.uid}">${esc(state.me.username)} <span class="uid">#${state.me.uid}</span></a>`);
       links.push('<button class="link" data-action="logout">Выйти</button>');
@@ -92,7 +93,7 @@
 
   async function viewCategory(id) {
     const [cat, threads] = await Promise.all([
-      sb.from('categories').select('id, name').eq('id', id).maybeSingle(),
+      sb.from('categories').select('id, name, staff_only').eq('id', id).maybeSingle(),
       sb.from('thread_list')
         .select('id, title, is_pinned, is_locked, author_name, created_at, last_post_at, replies')
         .eq('category_id', id)
@@ -102,18 +103,31 @@
     if (cat.error) throw cat.error;
     if (threads.error) throw threads.error;
     if (!cat.data) return notFound();
+    const postBtn = !state.me
+      ? '<a class="btn" href="#/login">Войдите, чтобы писать</a>'
+      : state.me.banned ? '<span class="muted">Аккаунт заблокирован</span>'
+      : (!cat.data.staff_only || isStaff())
+        ? `<a class="btn" href="#/c/${id}/new">Новый тред</a>`
+        : '<span class="muted">Раздел только для администрации</span>';
     const rows = threads.data.map((t) => `<a class="row" href="#/t/${t.id}"><div class="grow">
         <div class="row-title">${t.is_pinned ? '<span class="tag">закреплён</span>' : ''}${t.is_locked ? '<span class="tag lock">закрыт</span>' : ''}${esc(t.title)}</div>
         <div class="muted">${esc(t.author_name)} · ${fmt(t.created_at)}</div></div>
         <div class="stat">${t.replies} отв.</div><div class="stat muted">${fmt(t.last_post_at)}</div></a>`).join('');
     render(`<div class="crumbs"><a href="#/">Форум</a> / ${esc(cat.data.name)}</div>
       <div class="head-row"><h1>${esc(cat.data.name)}</h1>
-      ${state.me ? `<a class="btn" href="#/c/${id}/new">Новый тред</a>` : '<a class="btn" href="#/login">Войдите, чтобы писать</a>'}</div>
+      ${postBtn}</div>
       <div class="panel">${rows || '<div class="row muted">В этом разделе ещё нет тредов.</div>'}</div>`);
   }
 
-  function viewNewThread(catId) {
+  async function viewNewThread(catId) {
     if (!state.me) return needLogin(`/c/${catId}/new`);
+    if (state.me.banned) { flash('Аккаунт заблокирован.'); return goto(`#/c/${catId}`); }
+    const cat = await sb.from('categories').select('staff_only').eq('id', catId).maybeSingle();
+    if (cat.error) throw cat.error;
+    if (cat.data?.staff_only && !isStaff()) {
+      flash('В этот раздел могут писать только администраторы.');
+      return goto(`#/c/${catId}`);
+    }
     render(`<div class="crumbs"><a href="#/">Форум</a> / <a href="#/c/${catId}">раздел</a> / новый тред</div>
       <h1>Новый тред</h1>
       <form class="panel form" data-form="new-thread" data-cat="${catId}">
@@ -133,6 +147,8 @@
     if (posts.error) throw posts.error;
     if (!t.data) return notFound();
     const th = t.data;
+    const catRes = await sb.from('categories').select('staff_only').eq('id', th.category_id).maybeSingle();
+    const staffOnly = !!catRes.data?.staff_only;
     const mod = isStaff() ? `<div class="mod panel">
         <span class="muted">Модерация:</span>
         <button class="btn small" data-action="thread-mod" data-thread="${th.id}" data-mod="pin">${th.is_pinned ? 'Открепить' : 'Закрепить'}</button>
@@ -154,6 +170,10 @@
     let replyBox;
     if (!state.me) {
       replyBox = `<div class="panel muted"><a href="#/login?next=${encodeURIComponent('/t/' + id)}">Войдите</a>, чтобы ответить.</div>`;
+    } else if (state.me.banned) {
+      replyBox = '<div class="panel muted">Аккаунт заблокирован. Писать нельзя.</div>';
+    } else if (staffOnly && !isStaff()) {
+      replyBox = '<div class="panel muted">В этом разделе писать могут только администраторы.</div>';
     } else if (th.is_locked && !isStaff()) {
       replyBox = '<div class="panel muted">Тред закрыт для ответов.</div>';
     } else {
@@ -220,7 +240,7 @@
   async function viewAdmin() {
     if (!isStaff()) return render('<div class="panel empty"><h1>403</h1><p>Доступ запрещён.</p></div>');
     const [users, invites, cats] = await Promise.all([
-      sb.from('profiles').select('uid, username, role, created_at, inviter:profiles!invited_by(username)').order('uid'),
+      sb.from('profiles').select('uid, username, role, banned, created_at, inviter:profiles!invited_by(username)').order('uid'),
       sb.from('invites')
         .select('code, created_at, used_at, creator:profiles!created_by(username), used:profiles!used_by(username)')
         .order('created_at', { ascending: false }).limit(200),
@@ -229,18 +249,25 @@
     for (const r of [users, invites, cats]) if (r.error) throw r.error;
 
     const userRows = users.data.map((u) => {
-      let action = '<span class="muted">—</span>';
+      const parts = [];
       if (isOwner() && u.role !== 'owner') {
-        action = u.role === 'admin'
+        parts.push(u.role === 'admin'
           ? `<button class="btn small danger" data-action="set-role" data-uid="${u.uid}" data-role="user">Снять админа</button>`
-          : `<button class="btn small" data-action="set-role" data-uid="${u.uid}" data-role="admin">Сделать админом</button>`;
+          : `<button class="btn small" data-action="set-role" data-uid="${u.uid}" data-role="admin">Сделать админом</button>`);
       }
+      const canBan = u.role !== 'owner' && u.uid !== state.me.uid && (u.role === 'user' || isOwner());
+      if (canBan) {
+        parts.push(u.banned
+          ? `<button class="btn small" data-action="set-ban" data-uid="${u.uid}" data-banned="false">Разбанить</button>`
+          : `<button class="btn small danger" data-action="set-ban" data-uid="${u.uid}" data-banned="true">Забанить</button>`);
+      }
+      const action = parts.join(' ') || '<span class="muted">—</span>';
       return `<div class="row">
         <div class="stat narrow-col">${u.uid}</div>
-        <div class="grow"><a href="#/u/${u.uid}">${esc(u.username)}</a></div>
+        <div class="grow"><a href="#/u/${u.uid}">${esc(u.username)}</a>${u.banned ? ' <span class="tag lock">заблокирован</span>' : ''}</div>
         <div class="stat">${roleTag(u.role)}</div>
         <div class="stat muted">${esc(u.inviter?.username || '—')}</div>
-        ${isOwner() ? `<div class="stat">${action}</div>` : ''}</div>`;
+        <div class="stat action">${action}</div></div>`;
     }).join('');
 
     const inviteRows = invites.data.map((i) => `<div class="row">
@@ -263,7 +290,7 @@
       <h2>Пользователи</h2>
       <div class="panel">
         <div class="row head"><div class="stat narrow-col">UID</div><div class="grow">Ник</div>
-          <div class="stat">Роль</div><div class="stat">Пригласил</div>${isOwner() ? '<div class="stat">Действие</div>' : ''}</div>
+          <div class="stat">Роль</div><div class="stat">Пригласил</div><div class="stat">Действие</div></div>
         ${userRows}
       </div>
       <h2>Разделы</h2>
@@ -276,6 +303,66 @@
       <div class="panel">${catRows}</div>`);
   }
 
+  // ---------- тикеты ----------
+  const TICKET_STATUS = { open: 'Открыт', in_progress: 'В работе', closed: 'Закрыт' };
+  const ticketStatus = (s) => `<span class="role ${s === 'closed' ? '' : 'role-admin'}">${esc(TICKET_STATUS[s] || s)}</span>`;
+
+  async function viewTickets() {
+    if (!state.me) return needLogin('/tickets');
+    const { data, error } = await sb.from('tickets')
+      .select('id, subject, status, created_at, author:profiles!author_uid(uid, username)')
+      .order('updated_at', { ascending: false }).limit(100);
+    if (error) throw error;
+    const rows = data.map((t) => `<a class="row" href="#/tickets/${t.id}"><div class="grow">
+        <div class="row-title">${esc(t.subject)}</div>
+        <div class="muted">${esc(t.author.username)} · ${fmt(t.created_at)}</div></div>
+        <div class="stat">${ticketStatus(t.status)}</div></a>`).join('');
+    render(`<div class="head-row"><h1>Тикеты</h1><a class="btn" href="#/tickets/new">Новый тикет</a></div>
+      <p class="muted">Сообщайте о багах и вопросах по сайту.${isStaff() ? ' Вы видите тикеты всех пользователей.' : ' Вы видите только свои тикеты.'}</p>
+      <div class="panel">${rows || '<div class="row muted">Тикетов пока нет.</div>'}</div>`);
+  }
+
+  function viewNewTicket() {
+    if (!state.me) return needLogin('/tickets/new');
+    if (state.me.banned) { flash('Аккаунт заблокирован.'); return goto('#/tickets'); }
+    render(`<div class="crumbs"><a href="#/tickets">Тикеты</a> / новый</div>
+      <h1>Новый тикет</h1>
+      <form class="panel form" data-form="new-ticket">
+        <label>Тема<input name="subject" required minlength="3" maxlength="120" placeholder="Например: не открывается страница раздела"></label>
+        <label>Описание (что делали, что ожидали, что получилось)<textarea name="body" rows="8" required maxlength="5000"></textarea></label>
+        <button class="btn" type="submit">Отправить</button>
+      </form>`);
+  }
+
+  async function viewTicket(id) {
+    if (!state.me) return needLogin(`/tickets/${id}`);
+    const [t, msgs] = await Promise.all([
+      sb.from('tickets').select('id, subject, status, created_at, author:profiles!author_uid(uid, username)').eq('id', id).maybeSingle(),
+      sb.from('ticket_messages').select('id, body, created_at, author:profiles!author_uid(uid, username, role)').eq('ticket_id', id).order('id'),
+    ]);
+    if (t.error) throw t.error;
+    if (msgs.error) throw msgs.error;
+    if (!t.data) return notFound();
+    const tk = t.data;
+    const statusBtns = isStaff()
+      ? `<div class="mod panel"><span class="muted">Статус:</span>
+          ${['open', 'in_progress', 'closed'].map((s) => `<button class="btn small" data-action="ticket-status" data-ticket="${tk.id}" data-status="${s}" ${tk.status === s ? 'disabled' : ''}>${TICKET_STATUS[s]}</button>`).join(' ')}
+        </div>` : '';
+    const list = msgs.data.map((m) => `<article class="post">
+        <aside class="author"><a class="name" href="#/u/${m.author.uid}">${esc(m.author.username)}</a>${roleTag(m.author.role)}</aside>
+        <div class="content"><div class="meta muted">${fmt(m.created_at)}</div><div class="body">${esc(m.body)}</div></div></article>`).join('');
+    let reply;
+    if (state.me.banned) reply = '<div class="panel muted">Аккаунт заблокирован. Писать нельзя.</div>';
+    else if (tk.status === 'closed' && !isStaff()) reply = '<div class="panel muted">Тикет закрыт.</div>';
+    else reply = `<form class="panel form" data-form="ticket-reply" data-ticket="${tk.id}">
+        <label>Ответ<textarea name="body" rows="5" required maxlength="5000"></textarea></label>
+        <button class="btn" type="submit">Ответить</button></form>`;
+    render(`<div class="crumbs"><a href="#/tickets">Тикеты</a> / #${tk.id}</div>
+      <h1>${esc(tk.subject)} ${ticketStatus(tk.status)}</h1>
+      <div class="muted">От ${esc(tk.author.username)} · ${fmt(tk.created_at)}</div>
+      ${statusBtns}${list}${reply}`);
+  }
+
   // ---------- маршрутизация ----------
   const ROUTES = [
     [/^\/$/, viewIndex],
@@ -286,6 +373,9 @@
     [/^\/login$/, viewLogin],
     [/^\/register$/, viewRegister],
     [/^\/admin$/, viewAdmin],
+    [/^\/tickets$/, viewTickets],
+    [/^\/tickets\/new$/, viewNewTicket],
+    [/^\/tickets\/(\d+)$/, (m) => viewTicket(Number(m[1]))],
   ];
 
   let routeToken = 0;
@@ -336,6 +426,12 @@
       } else if (d.action === 'create-invite') {
         const code = await rpc('create_invite');
         flash(`Инвайт создан: ${code}`);
+      } else if (d.action === 'ticket-status') {
+        await rpc('set_ticket_status', { p_ticket: Number(d.ticket), p_status: d.status });
+        flash('Статус изменён.');
+      } else if (d.action === 'set-ban') {
+        await rpc('set_ban', { p_uid: Number(d.uid), p_banned: d.banned === 'true' });
+        flash(d.banned === 'true' ? 'Пользователь заблокирован.' : 'Пользователь разблокирован.');
       } else if (d.action === 'set-role') {
         await rpc('set_role', { p_uid: Number(d.uid), p_role: d.role });
         flash('Роль изменена.');
@@ -361,7 +457,7 @@
         const { error } = USERNAME_RE.test(username)
           ? await sb.auth.signInWithPassword({ email: emailFor(username), password })
           : { error: new Error('x') };
-        if (error) throw new Error('Неверный ник или пароль.');
+        if (error) throw new Error(/banned/i.test(error.message) ? 'Аккаунт заблокирован.' : 'Неверный ник или пароль.');
         await loadMe();
         renderNav();
         flash('Вы вошли.');
@@ -399,6 +495,18 @@
       if (kind === 'reply') {
         await rpc('reply_to_thread', { p_thread: Number(f.dataset.thread), p_body: v('body') });
         flash('Ответ добавлен.');
+        return route();
+      }
+
+      if (kind === 'new-ticket') {
+        const id = await rpc('create_ticket', { p_subject: v('subject'), p_body: v('body') });
+        flash('Тикет отправлен.');
+        return goto(`#/tickets/${id}`);
+      }
+
+      if (kind === 'ticket-reply') {
+        await rpc('reply_ticket', { p_ticket: Number(f.dataset.ticket), p_body: v('body') });
+        flash('Ответ отправлен.');
         return route();
       }
 
