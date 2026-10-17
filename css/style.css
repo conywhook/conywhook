@@ -101,3 +101,19 @@ textarea { resize: vertical; min-height: 120px; }
 
 .brand { display: inline-flex; align-items: center; gap: 8px; }
 .logo { border-radius: 50%; width: 22px; height: 22px; }
+
+/* чат и статистика */
+.stats-plate { display: flex; gap: 24px; flex-wrap: wrap; padding: 10px 14px; margin-top: 16px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 4px; }
+.chat { padding: 10px; }
+.chat-head { display: flex; justify-content: flex-end; min-height: 4px; margin-bottom: 6px; }
+.chat-box { height: 320px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 8px;
+  background: #0f0f0f; border: 1px solid var(--border); border-radius: 3px; }
+.chat-msg { display: flex; gap: 8px; align-items: flex-start; }
+.chat-msg.bot { color: var(--muted); font-style: italic; }
+.chat-main { min-width: 0; flex: 1; }
+.chat-name { color: #fff; font-weight: 500; }
+.chat-body { white-space: pre-wrap; word-wrap: break-word; }
+.chat-form { display: flex; gap: 8px; margin-top: 8px; }
+.chat-form input { flex: 1; }
+.avatar-xs { width: 24px; height: 24px; font-size: 12px; }
