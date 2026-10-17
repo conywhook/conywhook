@@ -86,3 +86,18 @@ textarea { resize: vertical; min-height: 120px; }
 }
 
 .stat.action { width: 260px; text-align: right; }
+
+.role-helper { background: #2d5c4a; color: #c8f0dc; }
+
+/* профиль и аватары */
+.avatar { width: 40px; height: 40px; border-radius: 4px; object-fit: cover; flex-shrink: 0;
+  background: var(--panel-2); color: var(--muted); display: inline-flex; align-items: center; justify-content: center;
+  font-weight: 600; }
+.avatar-lg { width: 96px; height: 96px; font-size: 36px; }
+.author .avatar { margin-bottom: 4px; }
+.profile-head { display: flex; gap: 16px; align-items: center; margin-top: 16px; }
+.role-card { margin-top: 6px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.bio { padding: 14px; white-space: pre-wrap; word-wrap: break-word; }
+
+.brand { display: inline-flex; align-items: center; gap: 8px; }
+.logo { border-radius: 50%; }
