@@ -9,7 +9,7 @@
   }
   const sb = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
 
-  const ROLE_NAMES = { owner: 'Владелец', admin: 'Администратор', helper: 'Помощник', user: 'Участник' };
+  const ROLE_NAMES = { owner: 'Владелец', admin: 'Администратор', coder: 'Кодер', user: 'Участник' };
   const USERNAME_RE = /^[A-Za-z0-9_]{3,20}$/;
   const state = { me: null, flashes: [] };
 
