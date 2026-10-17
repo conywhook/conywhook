@@ -79,6 +79,37 @@
   }
 
   // ---------- представления ----------
+  // ---------- чат и статистика ----------
+  let chatTimer = null;
+  const chatLine = (m) => {
+    if (m.is_bot) {
+      return `<div class="chat-msg bot"><div class="chat-main"><span class="chat-name">ChatBot</span> <span class="muted">${fmt(m.created_at)}</span><div class="chat-body">${esc(m.body)}</div></div></div>`;
+    }
+    const a = m.author || { uid: 0, username: '?', role: 'user' };
+    return `<div class="chat-msg"><div class="avatar-wrap">${avatarHtml(a, 'avatar-xs')}</div><div class="chat-main"><a class="chat-name" href="#/u/${a.uid}">${esc(a.username)}</a> ${roleTag(a.role)} <span class="muted">${fmt(m.created_at)}</span><div class="chat-body">${esc(m.body)}</div></div></div>`;
+  };
+  async function loadChat() {
+    const box = document.getElementById('chat-box');
+    if (!box) return;
+    const { data, error } = await sb.from('chat_messages')
+      .select('id, body, created_at, is_bot, author:profiles!author_uid(uid, username, role, avatar_url)')
+      .order('id', { ascending: false }).limit(50);
+    if (!document.getElementById('chat-box')) return;
+    if (error) { box.innerHTML = `<div class="muted">${esc(friendlyError(error))}</div>`; return; }
+    const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+    box.innerHTML = data.slice().reverse().map(chatLine).join('') || '<div class="muted">Сообщений пока нет.</div>';
+    if (atBottom) box.scrollTop = box.scrollHeight;
+  }
+  async function loadStats() {
+    const el = document.getElementById('site-stats');
+    if (!el) return;
+    const { data, error } = await sb.rpc('site_stats');
+    if (!document.getElementById('site-stats')) return;
+    if (error || !data || !data.length) { el.innerHTML = ''; return; }
+    const s = data[0];
+    el.innerHTML = `<div class="stats-plate"><span>Участников: <b>${s.members}</b></span><span>Последний: <a href="#/u/${s.last_uid}">${esc(s.last_username)}</a> <span class="muted">${fmt(s.last_joined)}</span></span></div>`;
+  }
+
   async function viewIndex() {
     const [cats, threads] = await Promise.all([
       sb.from('categories').select('id, name, description').order('position').order('id'),
@@ -98,7 +129,30 @@
         <div class="grow"><div class="row-title">${esc(c.name)}</div><div class="muted">${esc(c.description)}</div></div>
         <div class="stat">${s.count} тредов</div><div class="stat muted">${fmt(s.last)}</div></a>`;
     }).join('');
-    render(`<h1>Разделы</h1><div class="panel">${rows || '<div class="row muted">Разделов пока нет.</div>'}</div>`);
+    const clearBtn = isStaff() ? '<button class="btn small danger" data-action="chat-clear">Очистить чат</button>' : '';
+    let chatInner;
+    if (!state.me) {
+      chatInner = '<div class="panel empty muted">Чат виден только зарегистрированным участникам. <a href="#/login">Войдите</a>.</div>';
+    } else {
+      const form = state.me.banned
+        ? '<div class="muted">Аккаунт заблокирован: писать в чат нельзя.</div>'
+        : '<form class="chat-form" data-form="chat"><input name="body" maxlength="1000" required placeholder="Написать в общий чат" autocomplete="off"><button class="btn" type="submit">Отправить</button></form>';
+      chatInner = `<div class="panel chat">
+          <div class="chat-head">${clearBtn}</div>
+          <div id="chat-box" class="chat-box"></div>
+          ${form}
+        </div>`;
+    }
+    render(`<div id="site-stats"></div>
+      <h1>Разделы</h1>
+      <div class="panel">${rows || '<div class="row muted">Разделов пока нет.</div>'}</div>
+      <h2>Общий чат</h2>
+      ${chatInner}`);
+    loadStats();
+    if (state.me) {
+      loadChat();
+      chatTimer = setInterval(loadChat, 5000);
+    }
   }
 
   async function viewCategory(id) {
@@ -417,6 +471,7 @@
   let routeToken = 0;
   async function route() {
     const token = ++routeToken;
+    if (chatTimer) { clearInterval(chatTimer); chatTimer = null; }
     const raw = location.hash.replace(/^#/, '') || '/';
     const [path, query = ''] = raw.split('?');
     const params = new URLSearchParams(query);
@@ -465,6 +520,10 @@
       } else if (d.action === 'ticket-status') {
         await rpc('set_ticket_status', { p_ticket: Number(d.ticket), p_status: d.status });
         flash('Статус изменён.');
+      } else if (d.action === 'chat-clear') {
+        if (!confirm('Очистить общий чат?')) return;
+        await rpc('clear_chat');
+        flash('Чат очищен.');
       } else if (d.action === 'set-ban') {
         await rpc('set_ban', { p_uid: Number(d.uid), p_banned: d.banned === 'true' });
         flash(d.banned === 'true' ? 'Пользователь заблокирован.' : 'Пользователь разблокирован.');
@@ -562,6 +621,12 @@
         await rpc('update_profile', { p_avatar: avatar, p_bio: f.elements.bio.value.trim() });
         flash('Профиль сохранён.');
         return route();
+      }
+
+      if (kind === 'chat') {
+        await rpc('send_chat_message', { p_body: v('body') });
+        f.reset();
+        return loadChat();
       }
 
       if (kind === 'category') {
