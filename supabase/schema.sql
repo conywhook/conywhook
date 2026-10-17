@@ -8,7 +8,7 @@ create table if not exists public.profiles (
   uid         bigint generated always as identity primary key,
   id          uuid not null unique references auth.users(id) on delete cascade,
   username    text not null check (username ~ '^[A-Za-z0-9_]{3,20}$'),
-  role        text not null default 'user' check (role in ('owner', 'admin', 'user')),
+  role        text not null default 'user' check (role in ('owner', 'admin', 'helper', 'user')),
   banned      boolean not null default false,
   invited_by  bigint references public.profiles(uid),
   created_at  timestamptz not null default now()
@@ -82,6 +82,14 @@ create or replace function public.is_banned() returns boolean
 language sql stable security definer set search_path = public as $$
   select exists (select 1 from public.profiles where id = auth.uid() and banned)
 $$;
+
+create or replace function public.is_support() returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (select 1 from public.profiles
+                 where id = auth.uid() and role in ('owner', 'admin') and not banned)
+$$;
+revoke execute on function public.is_support() from public, anon;
+grant execute on function public.is_support() to authenticated;
 
 -- ---------- 3. Регистрация только по инвайту ----------
 -- Срабатывает при создании аккаунта. Если инвайт неверный или занят,
@@ -245,7 +253,7 @@ create or replace function public.set_role(p_uid bigint, p_role text) returns vo
 language plpgsql security definer set search_path = public as $$
 begin
   if not public.is_owner() then raise exception 'Только владелец может менять роли.'; end if;
-  if p_role not in ('admin', 'user') then raise exception 'Недопустимая роль.'; end if;
+  if p_role not in ('admin', 'helper', 'user') then raise exception 'Недопустимая роль.'; end if;
   if not exists (select 1 from public.profiles where uid = p_uid) then
     raise exception 'Пользователь не найден.';
   end if;
@@ -312,7 +320,7 @@ grant select on public.invites to authenticated;
 grant select on public.thread_list to anon, authenticated;
 
 grant execute on function public.check_invite(text) to anon, authenticated;
-grant execute on function public.current_uid(), public.is_staff(), public.is_owner(), public.is_banned(), public.set_ban(bigint, boolean),
+grant execute on function public.current_uid(), public.is_staff(), public.is_owner(), public.is_support(), public.is_banned(), public.set_ban(bigint, boolean),
   public.my_profile(), public.create_thread(bigint, text, text),
   public.reply_to_thread(bigint, text), public.mod_thread(bigint, text),
   public.delete_thread(bigint), public.delete_post(bigint), public.create_invite(),
@@ -343,12 +351,12 @@ alter table public.ticket_messages enable row level security;
 
 drop policy if exists "tickets own or staff" on public.tickets;
 create policy "tickets own or staff" on public.tickets for select to authenticated
-  using (author_uid = public.current_uid() or public.is_staff());
+  using (author_uid = public.current_uid() or public.is_support());
 
 drop policy if exists "ticket messages own or staff" on public.ticket_messages;
 create policy "ticket messages own or staff" on public.ticket_messages for select to authenticated
   using (exists (select 1 from public.tickets t
-                 where t.id = ticket_id and (t.author_uid = public.current_uid() or public.is_staff())));
+                 where t.id = ticket_id and (t.author_uid = public.current_uid() or public.is_support())));
 
 create or replace function public.create_ticket(p_subject text, p_body text)
 returns bigint language plpgsql security definer set search_path = public as $$
@@ -384,10 +392,10 @@ begin
   if public.is_banned() then raise exception 'Аккаунт заблокирован.'; end if;
   select author_uid, status into v_author, v_status from public.tickets where id = p_ticket;
   if not found then raise exception 'Тикет не найден.'; end if;
-  if v_author <> v_me and not public.is_staff() then
+  if v_author <> v_me and not public.is_support() then
     raise exception 'Недостаточно прав.';
   end if;
-  if v_status = 'closed' and not public.is_staff() then
+  if v_status = 'closed' and not public.is_support() then
     raise exception 'Тикет закрыт.';
   end if;
   if char_length(trim(p_body)) not between 1 and 5000 then
@@ -397,7 +405,7 @@ begin
     values (p_ticket, v_me, trim(p_body)) returning id into v_mid;
   update public.tickets
     set updated_at = now(),
-        status = case when public.is_staff() and status = 'open' then 'in_progress' else status end
+        status = case when public.is_support() and status = 'open' then 'in_progress' else status end
     where id = p_ticket;
   return v_mid;
 end $$;
@@ -405,7 +413,7 @@ end $$;
 create or replace function public.set_ticket_status(p_ticket bigint, p_status text) returns void
 language plpgsql security definer set search_path = public as $$
 begin
-  if not public.is_staff() then raise exception 'Недостаточно прав.'; end if;
+  if not public.is_support() then raise exception 'Недостаточно прав.'; end if;
   if p_status not in ('open', 'in_progress', 'closed') then raise exception 'Недопустимый статус.'; end if;
   update public.tickets set status = p_status, updated_at = now() where id = p_ticket;
   if not found then raise exception 'Тикет не найден.'; end if;
@@ -417,6 +425,59 @@ revoke execute on function public.set_ticket_status(bigint, text) from public, a
 grant execute on function public.create_ticket(text, text), public.reply_ticket(bigint, text),
   public.set_ticket_status(bigint, text) to authenticated;
 grant select on public.tickets, public.ticket_messages to authenticated;
+
+-- ---------- Профиль: аватар (ссылка https) и описание ----------
+alter table public.profiles add column if not exists avatar_url text;
+alter table public.profiles add column if not exists bio text not null default '';
+
+alter table public.profiles drop constraint if exists profiles_avatar_url_check;
+alter table public.profiles add constraint profiles_avatar_url_check
+  check (avatar_url is null or (avatar_url ~ '^https://[^[:space:]]+$' and char_length(avatar_url) <= 500));
+
+alter table public.profiles drop constraint if exists profiles_bio_check;
+alter table public.profiles add constraint profiles_bio_check check (char_length(bio) <= 500);
+
+create or replace function public.update_profile(p_avatar text, p_bio text) returns void
+language plpgsql security definer set search_path = public as $$
+declare
+  v_avatar text := nullif(trim(coalesce(p_avatar, '')), '');
+  v_bio    text := trim(coalesce(p_bio, ''));
+begin
+  if public.current_uid() is null then raise exception 'Сначала войдите в аккаунт.'; end if;
+  if v_avatar is not null and (v_avatar !~ '^https://[^[:space:]]+$' or char_length(v_avatar) > 500) then
+    raise exception 'Аватар: нужна ссылка, которая начинается с https://';
+  end if;
+  if char_length(v_bio) > 500 then
+    raise exception 'Описание: не больше 500 символов.';
+  end if;
+  update public.profiles set avatar_url = v_avatar, bio = v_bio where id = auth.uid();
+end $$;
+
+revoke execute on function public.update_profile(text, text) from public, anon;
+grant execute on function public.update_profile(text, text) to authenticated;
+grant select (avatar_url, bio) on public.profiles to anon, authenticated;
+
+-- ---------- Хранилище аватаров (загрузка файла в профиле) ----------
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('avatars', 'avatars', true, 2097152, array['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
+on conflict (id) do update
+  set public = true,
+      file_size_limit = 2097152,
+      allowed_mime_types = excluded.allowed_mime_types;
+
+drop policy if exists "avatars read" on storage.objects;
+create policy "avatars read" on storage.objects for select to anon, authenticated
+  using (bucket_id = 'avatars');
+
+drop policy if exists "avatars upload own folder" on storage.objects;
+create policy "avatars upload own folder" on storage.objects for insert to authenticated
+  with check (bucket_id = 'avatars'
+              and (storage.foldername(name))[1] = public.current_uid()::text
+              and not public.is_banned());
+
+drop policy if exists "avatars delete own folder" on storage.objects;
+create policy "avatars delete own folder" on storage.objects for delete to authenticated
+  using (bucket_id = 'avatars' and (storage.foldername(name))[1] = public.current_uid()::text);
 
 -- ---------- 9. Стартовые данные (выполнить один раз) ----------
 insert into public.categories (name, description, position)
