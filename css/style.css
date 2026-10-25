@@ -200,3 +200,14 @@ input:focus, textarea:focus { border-color: var(--lime); }
 .navstrip nav { display: flex; align-items: center; gap: 18px; height: 40px; padding: 0 2px; }
 .chat-msg.mine .chat-name { color: var(--lime); }
 .avatar-wrap { flex-shrink: 0; }
+
+/* ---- третий проход: ближе к макету (шапка, полосы, карточки) ---- */
+.topbar { background: #1b1b1b; }
+.brand { font-size: 18px; font-weight: 400; letter-spacing: 0; color: #e8e8e8; }
+.navstrip { background: #2b2b2b; }
+.navstrip nav { font-size: 13px; }
+.navstrip nav a, .navstrip nav button.link { color: #e4e4e4; }
+.panel { background: #282828; border: 1px solid #343434; }
+.foot { color: #8c8c8c; padding: 18px 0 30px; }
+.flash { font-size: 13px; }
+h1 { font-size: 16px; }
