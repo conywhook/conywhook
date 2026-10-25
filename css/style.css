@@ -117,3 +117,86 @@ textarea { resize: vertical; min-height: 120px; }
 .chat-form { display: flex; gap: 8px; margin-top: 8px; }
 .chat-form input { flex: 1; }
 .avatar-xs { width: 24px; height: 24px; font-size: 12px; }
+
+/* ---- стиль gamesense: тёмный, резкие углы, капсом-заголовки, синий акцент ---- */
+:root {
+  --bg: #111214;
+  --panel: #17181b;
+  --panel-2: #1f2125;
+  --border: #2a2d33;
+  --text: #c9cdd3;
+  --muted: #7d838c;
+  --accent: #7fbfff;
+}
+body { background: var(--bg); }
+.topbar { background: #0c0d0f; border-bottom: 1px solid var(--border); }
+.brand { letter-spacing: .02em; }
+.panel, .post, .flash, .btn, .role, .tag, .avatar, .stats-plate, .chat-box,
+input, textarea, .btn.small {
+  border-radius: 0 !important;
+}
+h2 {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+h1 { font-weight: 500; letter-spacing: .01em; }
+.btn { background: #2a5680; }
+.btn:hover { background: #33689c; }
+.btn.danger { background: #4a2a2a; }
+.row:hover, a.row:hover { background: var(--panel-2); }
+.flash { background: #15202c; border-color: #2a5680; }
+.role-admin { background: #2a5680; }
+.role-owner { background: #3d2a52; }
+
+/* ---- второй проход: как на скриншоте gamesense (компактные карточки, полосы заголовков) ---- */
+:root {
+  --bg: #141414;
+  --panel: #262626;
+  --panel-2: #2e2e2e;
+  --border: #353535;
+  --text: #d6d6d6;
+  --muted: #9a9a9a;
+  --accent: #6aa8e8;
+  --lime: #a4d43b;
+}
+body { background: var(--bg); font-size: 14px; }
+.wrap { max-width: 1070px; }
+.topbar { background: #1c1c1c; border-bottom: none; }
+.bar { height: 52px; }
+.brand { color: #e6e6e6; font-weight: 400; font-size: 17px; }
+.brand span { color: var(--lime); }
+nav a { color: #e0e0e0; font-size: 13px; }
+nav a:hover { color: #fff; text-decoration: none; }
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  box-shadow: none;
+}
+.panel .row, .panel .profile { border-bottom: 1px solid #2f2f2f; }
+.row.head { background: var(--panel-2); color: var(--muted); }
+h1, h2 { font-size: 15px; font-weight: 500; letter-spacing: 0; text-transform: none; color: #e6e6e6; margin: 14px 0 8px; }
+h2 { color: #e6e6e6; }
+a { color: var(--accent); }
+.muted { color: var(--muted); }
+.flash { background: #2a3440; border: 1px solid #3a4a5c; color: #dce8f5; }
+.btn { background: #3a6f99; font-size: 13px; }
+.btn:hover { background: #4a80ad; }
+.btn.small { background: #343434; color: #d6d6d6; }
+.btn.small:hover { background: #3f3f3f; }
+input, textarea { background: #1a1a1a; border: 1px solid #3a3a3a; color: #d6d6d6; }
+input:focus, textarea:focus { border-color: var(--lime); }
+.foot { color: var(--muted); font-size: 12px; text-align: left; }
+.crumbs { color: var(--muted); }
+.chat-box { background: #1a1a1a; border: 1px solid #353535; }
+.stats-plate { background: var(--panel); border: 1px solid var(--border); }
+.post { background: var(--panel); border: 1px solid var(--border); }
+.author { background: var(--panel-2); border-right: 1px solid #353535; }
+
+/* полоса навигации под шапкой и личные сообщения */
+.navstrip { background: #2e2e2e; border-top: 1px solid #353535; border-bottom: 1px solid #353535; }
+.navstrip nav { display: flex; align-items: center; gap: 18px; height: 40px; padding: 0 2px; }
+.chat-msg.mine .chat-name { color: var(--lime); }
+.avatar-wrap { flex-shrink: 0; }
