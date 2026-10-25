@@ -1,6 +1,7 @@
 -- Миграция: общий чат, очистка ботом и статистика участников.
 -- Выполните в SQL Editor один раз, если схема уже установлена (после migration_avatars.sql).
 
+-- ---------- Общий чат и статистика ----------
 create table if not exists public.chat_messages (
   id          bigint generated always as identity primary key,
   author_uid  bigint references public.profiles(uid),
