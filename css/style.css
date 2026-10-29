@@ -211,3 +211,20 @@ input:focus, textarea:focus { border-color: var(--lime); }
 .foot { color: #8c8c8c; padding: 18px 0 30px; }
 .flash { font-size: 13px; }
 h1 { font-size: 16px; }
+
+/* ---- роли Coder / Premium, скрытый раздел, подписка ---- */
+.role-coder { background: #1f4b4f; color: #bff3f0; }
+.role-premium { background: #5a4414; color: #ffe29a; }
+.tag.vip { background: #5a4414; color: #ffe29a; }
+select, .role-select { background: #1a1a1a; border: 1px solid #3a3a3a; color: #d6d6d6; border-radius: 3px;
+  padding: 3px 6px; font: inherit; font-size: 12px; }
+select:focus { outline: none; border-color: var(--accent); }
+label.check { flex-direction: row; align-items: center; gap: 8px; }
+label.check input { width: auto; }
+.sub-status { padding: 12px 14px; margin-bottom: 12px; }
+.sub-status.ok { border-color: #5a4414; color: #ffe29a; }
+.sub-info { padding: 6px 16px 16px; }
+.sub-info h2 { margin-top: 16px; }
+.sub-info ul, .sub-info ol { margin: 6px 0 0; padding-left: 22px; }
+.sub-info li { margin: 4px 0; }
+.sub-cta { margin-top: 16px; }
